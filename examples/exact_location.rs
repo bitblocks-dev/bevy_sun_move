@@ -1,14 +1,14 @@
 use std::f32::consts::PI;
 
 use bevy::{
-    core_pipeline::{bloom::Bloom, tonemapping::Tonemapping},
+    camera::Exposure,
+    core_pipeline::tonemapping::Tonemapping,
     gltf::GltfAssetLabel,
-    pbr::{
-        Atmosphere, AtmosphereSettings, CascadeShadowConfigBuilder,
-        light_consts::lux,
-    },
+    light::{CascadeShadowConfigBuilder, light_consts::lux},
+    pbr::{Atmosphere, AtmosphereSettings},
+    post_process::bloom::Bloom,
     prelude::*,
-    render::{camera::Exposure, mesh::Mesh3d},
+    render::view::Hdr,
     scene::SceneRoot, // Added missing imports
 };
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
@@ -21,7 +21,7 @@ fn main() {
         .add_plugins(SunMovePlugin) // Your plugin
         .add_plugins(RandomStarsPlugin)
         .add_plugins(EguiPlugin {
-            enable_multipass_for_primary_context: false,
+            ..Default::default()
         })
         .add_systems(Startup, (setup_camera_fog, setup_terrain_scene))
         .add_systems(Update, ui_system)
@@ -29,14 +29,12 @@ fn main() {
 }
 
 fn setup_camera_fog(mut commands: Commands) {
-    commands.spawn((
+    let bundle = (
         Camera3d::default(),
         Transform::from_xyz(-1.2, 0.15, 0.0).looking_at(Vec3::Y * 0.1, Vec3::Y),
+        Camera { ..default() },
         // HDR is required for atmospheric scattering to be properly applied to the scene
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        Hdr,
         Atmosphere::EARTH,
         AtmosphereSettings {
             aerial_view_lut_max_distance: 3.2e5,
@@ -46,7 +44,8 @@ fn setup_camera_fog(mut commands: Commands) {
         Exposure::SUNLIGHT,
         Tonemapping::AcesFitted,
         Bloom::NATURAL,
-    ));
+    );
+    commands.spawn(bundle);
 }
 
 #[derive(Component)]
@@ -149,130 +148,141 @@ fn ui_system(
         Err(_) => return,
     };
 
-    egui::Window::new("Sun Controls & Info").show(contexts.ctx_mut(), |ui| {
-        ui.heading("Sun Parameters");
-        ui.add(
-            egui::Slider::new(&mut sky_center.latitude_degrees, -90.0..=90.0).text("Latitude (°)"),
-        );
-        ui.add(
-            egui::Slider::new(&mut sky_center.planet_tilt_degrees, 0.0..=90.0)
-                .text("Planet Tilt (°)"),
-        ); // Tilt usually 0-90
-        ui.add(
-            egui::Slider::new(&mut sky_center.year_fraction, 0.0..=1.0)
-                .text("Year Fraction (0=VE, 0.25=SS, 0.5=AE, 0.75=WS)"),
-        );
-        ui.add(
-            egui::Slider::new(&mut sky_center.cycle_duration_secs, 1.0..=120.0)
-                .text("Day/Night Duration (s)"),
-        ); // Shorter max duration for faster cycles
+    egui::Window::new("Sun Controls & Info").show(
+        contexts
+            .ctx_mut()
+            .as_ref()
+            .expect("Couldn't get egui context"),
+        |ui| {
+            ui.heading("Sun Parameters");
+            ui.add(
+                egui::Slider::new(&mut sky_center.latitude_degrees, -90.0..=90.0)
+                    .text("Latitude (°)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut sky_center.planet_tilt_degrees, 0.0..=90.0)
+                    .text("Planet Tilt (°)"),
+            ); // Tilt usually 0-90
+            ui.add(
+                egui::Slider::new(&mut sky_center.year_fraction, 0.0..=1.0)
+                    .text("Year Fraction (0=VE, 0.25=SS, 0.5=AE, 0.75=WS)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut sky_center.cycle_duration_secs, 1.0..=120.0)
+                    .text("Day/Night Duration (s)"),
+            ); // Shorter max duration for faster cycles
 
-        // Option to pause/play time
-        let is_paused = sky_center.cycle_duration_secs == 0.0;
-        if ui
-            .button(if is_paused { "Play" } else { "Pause" })
-            .clicked()
-        {
-            if is_paused {
-                sky_center.cycle_duration_secs = 30.0;
-                sky_center.current_cycle_time %= sky_center.cycle_duration_secs.max(1.0);
-            } else {
-                sky_center.cycle_duration_secs = 0.0;
-            }
-        }
-
-        if sky_center.cycle_duration_secs > 0.0 {
-            // Only show time slider if not paused
-            let mut current_cycle_time = sky_center.current_cycle_time;
+            // Option to pause/play time
+            let is_paused = sky_center.cycle_duration_secs == 0.0;
             if ui
-                .add(
-                    egui::Slider::new(
-                        &mut current_cycle_time,
-                        0.0..=sky_center.cycle_duration_secs,
-                    )
-                    .text("Current Cycle Time (s)"),
-                )
-                .changed()
+                .button(if is_paused { "Play" } else { "Pause" })
+                .clicked()
             {
-                sky_center.current_cycle_time = current_cycle_time;
+                if is_paused {
+                    sky_center.cycle_duration_secs = 30.0;
+                    sky_center.current_cycle_time %= sky_center.cycle_duration_secs.max(1.0);
+                } else {
+                    sky_center.cycle_duration_secs = 0.0;
+                }
             }
-        }
 
-        ui.separator();
-
-        // Get current sun info from its transform
-        let sun_transform = q_transform.get(sky_center.sun).ok();
-
-        ui.heading("Current Sun Info");
-        if let Some(sun_transform) = sun_transform {
-            let current_sun_position = sun_transform.translation.normalize();
-
-            // Calculate Elevation (Altitude)
-            let elevation_rad = current_sun_position.y.asin();
-            let elevation_degrees = elevation_rad * RADIANS_TO_DEGREES;
-            ui.label(format!("Sun Elevation: {:.1}°", elevation_degrees));
-
-            // Calculate Heading (Azimuth from North towards East)
-            // Bevy's X is East, Z is North in our calculation frame
-            let heading_rad = current_sun_position.x.atan2(current_sun_position.z);
-            let mut heading_degrees = heading_rad * RADIANS_TO_DEGREES;
-            // Normalize heading to 0-360 degrees if preferred, or keep -180 to 180
-            if heading_degrees < 0.0 {
-                heading_degrees += 360.0;
+            if sky_center.cycle_duration_secs > 0.0 {
+                // Only show time slider if not paused
+                let mut current_cycle_time = sky_center.current_cycle_time;
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut current_cycle_time,
+                            0.0..=sky_center.cycle_duration_secs,
+                        )
+                        .text("Current Cycle Time (s)"),
+                    )
+                    .changed()
+                {
+                    sky_center.current_cycle_time = current_cycle_time;
+                }
             }
-            ui.label(format!("Sun Heading (from North): {:.1}°", heading_degrees));
 
-            let hour_fraction =
-                sky_center.current_cycle_time / sky_center.cycle_duration_secs.max(1.0); // Use max(1.0) to avoid division by zero if paused
-            let hour_of_day = hour_fraction * 24.0;
-            ui.label(format!("Time of Day: {:.2} hours", hour_of_day));
-        } else {
-            ui.label("Sun entity not found or query error.");
-        }
+            ui.separator();
 
-        ui.separator();
+            // Get current sun info from its transform
+            let sun_transform = q_transform.get(sky_center.sun).ok();
 
-        // Plot Data Calculation
-        let n_points = 100;
-        let latitude_rad = sky_center.latitude_degrees * DEGREES_TO_RADIANS;
-        let axial_tilt_rad = sky_center.planet_tilt_degrees * DEGREES_TO_RADIANS;
-        let year_fraction = sky_center.year_fraction;
+            ui.heading("Current Sun Info");
+            if let Some(sun_transform) = sun_transform {
+                let current_sun_position = sun_transform.translation.normalize();
 
-        let mut sun_elevation_points: Vec<[f64; 2]> = Vec::new();
-        let mut sun_heading_points: Vec<[f64; 2]> = Vec::new();
+                // Calculate Elevation (Altitude)
+                let elevation_rad = current_sun_position.y.asin();
+                let elevation_degrees = elevation_rad * RADIANS_TO_DEGREES;
+                ui.label(format!("Sun Elevation: {:.1}°", elevation_degrees));
 
-        for i in 0..=n_points {
-            let hour_fraction = i as f32 / n_points as f32;
-            let sun_direction =
-                calculate_sun_direction(hour_fraction, latitude_rad, axial_tilt_rad, year_fraction);
+                // Calculate Heading (Azimuth from North towards East)
+                // Bevy's X is East, Z is North in our calculation frame
+                let heading_rad = current_sun_position.x.atan2(current_sun_position.z);
+                let mut heading_degrees = heading_rad * RADIANS_TO_DEGREES;
+                // Normalize heading to 0-360 degrees if preferred, or keep -180 to 180
+                if heading_degrees < 0.0 {
+                    heading_degrees += 360.0;
+                }
+                ui.label(format!("Sun Heading (from North): {:.1}°", heading_degrees));
 
-            // Elevation (Altitude) for plot
-            let elevation_rad = sun_direction.y.asin();
-            let elevation_degrees = elevation_rad * RADIANS_TO_DEGREES;
-            sun_elevation_points.push([hour_fraction as f64, elevation_degrees as f64]);
+                let hour_fraction =
+                    sky_center.current_cycle_time / sky_center.cycle_duration_secs.max(1.0); // Use max(1.0) to avoid division by zero if paused
+                let hour_of_day = hour_fraction * 24.0;
+                ui.label(format!("Time of Day: {:.2} hours", hour_of_day));
+            } else {
+                ui.label("Sun entity not found or query error.");
+            }
 
-            // Heading (Azimuth from North towards East) for plot
-            let heading_rad = sun_direction.x.atan2(sun_direction.z);
-            let heading_degrees = heading_rad * RADIANS_TO_DEGREES;
-            // Normalize heading for plot continuity if needed (-180 to 180 is fine for egui_plot default)
-            sun_heading_points.push([hour_fraction as f64, heading_degrees as f64]);
-        }
+            ui.separator();
 
-        ui.separator();
-        ui.heading("Sun Trajectory (vs Day Fraction)");
+            // Plot Data Calculation
+            let n_points = 100;
+            let latitude_rad = sky_center.latitude_degrees * DEGREES_TO_RADIANS;
+            let axial_tilt_rad = sky_center.planet_tilt_degrees * DEGREES_TO_RADIANS;
+            let year_fraction = sky_center.year_fraction;
 
-        let sun_elevation_line = Line::new("Elevation (°)", sun_elevation_points);
-        let sun_heading_line = Line::new("Heading (°)", sun_heading_points);
+            let mut sun_elevation_points: Vec<[f64; 2]> = Vec::new();
+            let mut sun_heading_points: Vec<[f64; 2]> = Vec::new();
 
-        Plot::new("sun_trajectory_plot")
-            .legend(egui_plot::Legend::default())
-            .view_aspect(2.0)
-            .set_margin_fraction(egui::vec2(0.1, 0.1)) // Add some margin
-            .x_axis_label("Day Fraction (0=Mid, 0.5=Noon, 1=Mid)") // Label X axis
-            .y_axis_label("Angle (°)") // Label Y axis
-            .show(ui, |plot_ui| {
-                plot_ui.line(sun_elevation_line);
-                plot_ui.line(sun_heading_line);
-            });
-    });
+            for i in 0..=n_points {
+                let hour_fraction = i as f32 / n_points as f32;
+                let sun_direction = calculate_sun_direction(
+                    hour_fraction,
+                    latitude_rad,
+                    axial_tilt_rad,
+                    year_fraction,
+                );
+
+                // Elevation (Altitude) for plot
+                let elevation_rad = sun_direction.y.asin();
+                let elevation_degrees = elevation_rad * RADIANS_TO_DEGREES;
+                sun_elevation_points.push([hour_fraction as f64, elevation_degrees as f64]);
+
+                // Heading (Azimuth from North towards East) for plot
+                let heading_rad = sun_direction.x.atan2(sun_direction.z);
+                let heading_degrees = heading_rad * RADIANS_TO_DEGREES;
+                // Normalize heading for plot continuity if needed (-180 to 180 is fine for egui_plot default)
+                sun_heading_points.push([hour_fraction as f64, heading_degrees as f64]);
+            }
+
+            ui.separator();
+            ui.heading("Sun Trajectory (vs Day Fraction)");
+
+            let sun_elevation_line = Line::new("Elevation (°)", sun_elevation_points);
+            let sun_heading_line = Line::new("Heading (°)", sun_heading_points);
+
+            Plot::new("sun_trajectory_plot")
+                .legend(egui_plot::Legend::default())
+                .view_aspect(2.0)
+                .set_margin_fraction(egui::vec2(0.1, 0.1)) // Add some margin
+                .x_axis_label("Day Fraction (0=Mid, 0.5=Noon, 1=Mid)") // Label X axis
+                .y_axis_label("Angle (°)") // Label Y axis
+                .show(ui, |plot_ui| {
+                    plot_ui.line(sun_elevation_line);
+                    plot_ui.line(sun_heading_line);
+                });
+        },
+    );
 }

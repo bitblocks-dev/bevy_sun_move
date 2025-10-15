@@ -1,15 +1,10 @@
 use std::f32::consts::PI;
 
+use crate::light_consts::lux;
 use bevy::{
-    core_pipeline::{bloom::Bloom, tonemapping::Tonemapping},
-    gltf::GltfAssetLabel,
-    pbr::{
-        Atmosphere, AtmosphereSettings, CascadeShadowConfigBuilder,
-        light_consts::lux,
-    },
-    prelude::*,
-    render::{camera::Exposure, mesh::Mesh3d},
-    scene::SceneRoot,
+    camera::Exposure, core_pipeline::tonemapping::Tonemapping, gltf::GltfAssetLabel, light::CascadeShadowConfigBuilder, pbr::{
+        Atmosphere, AtmosphereSettings
+    }, post_process::bloom::Bloom, prelude::*, render::view::Hdr, scene::SceneRoot
 };
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
 use bevy_sun_move::{random_stars::*, *};
@@ -21,7 +16,7 @@ fn main() {
         .add_plugins(SunMovePlugin)
         .add_plugins(RandomStarsPlugin)
         .add_plugins(EguiPlugin {
-            enable_multipass_for_primary_context: false,
+            ..Default::default()
         })
         .add_systems(Startup, (setup_camera_fog, setup_terrain_scene))
         .add_systems(Update, ui_system)
@@ -33,9 +28,9 @@ fn setup_camera_fog(mut commands: Commands) {
         Camera3d::default(),
         Transform::from_xyz(-1.2, 0.15, 0.0).looking_at(Vec3::Y * 0.1, Vec3::Y),
         Camera {
-            hdr: true,
             ..default()
         },
+        Hdr,
         Atmosphere::EARTH,
         AtmosphereSettings {
             aerial_view_lut_max_distance: 3.2e5,
@@ -145,7 +140,7 @@ fn ui_system(
         Err(_) => return,
     };
 
-    egui::Window::new("Sky Cycle Settings").show(contexts.ctx_mut(), |ui| {
+    egui::Window::new("Sky Cycle Settings").show(contexts.ctx_mut().as_ref().expect("error getting egui context"), |ui| {
         ui.heading("Timed Sky Config");
         ui.label("Configure desired day/night durations and max sun height.");
 

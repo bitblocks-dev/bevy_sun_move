@@ -45,13 +45,13 @@ name = "timed_location"
 path = "examples/timed_location.rs"
 
 [dependencies.bevy]
-version = "0.16"
+version = "0.17"
 
 [dependencies.rand]
-version = "0.9.1"
+version = "0.9.2"
 
 [dev-dependencies.bevy_egui]
-version = "0.34"
+version = "0.38"
 
 [dev-dependencies.egui_plot]
-version = "0.32.1"
+version = "0.34.0"
