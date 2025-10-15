@@ -1,3 +1,5 @@
+> [!WARNING]
+> At the moment, most of the examples are broken due to the deprecation of multipass in EGui. As this port is intended for our personal use, we probably won't bother to fix it-but you can still use it. Any examples with EGui just need to be fixed or have EGui removed from them. I wouldn't recommend relying on this port.
 
 ![exact_location](https://github.com/user-attachments/assets/bb9b08fe-beb6-47d3-b544-576fe5c83156)
 
