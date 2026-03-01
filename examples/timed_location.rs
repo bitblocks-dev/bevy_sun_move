@@ -3,7 +3,7 @@ use std::f32::consts::PI;
 use crate::light_consts::lux;
 use bevy::{
     camera::Exposure, core_pipeline::tonemapping::Tonemapping, gltf::GltfAssetLabel, light::CascadeShadowConfigBuilder, pbr::{
-        Atmosphere, AtmosphereSettings
+        Atmosphere, AtmosphereSettings, ScatteringMedium
     }, post_process::bloom::Bloom, prelude::*, render::view::Hdr, scene::SceneRoot
 };
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
@@ -23,7 +23,10 @@ fn main() {
         .run();
 }
 
-fn setup_camera_fog(mut commands: Commands) {
+fn setup_camera_fog(
+    mut commands: Commands,
+    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>
+) {
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-1.2, 0.15, 0.0).looking_at(Vec3::Y * 0.1, Vec3::Y),
@@ -31,7 +34,7 @@ fn setup_camera_fog(mut commands: Commands) {
             ..default()
         },
         Hdr,
-        Atmosphere::EARTH,
+        Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
         AtmosphereSettings {
             aerial_view_lut_max_distance: 3.2e5,
             scene_units_to_m: 1e+4,

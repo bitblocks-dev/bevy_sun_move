@@ -1,6 +1,7 @@
 pub mod random_stars;
 
 use bevy::prelude::*;
+use bevy_ingame_clock::{InGameClock, InGameClockPlugin};
 use std::f32::consts::PI;
 
 // Helper constants
@@ -11,6 +12,10 @@ pub struct SunMovePlugin;
 
 impl Plugin for SunMovePlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(InGameClockPlugin);
+        app.insert_resource(
+            InGameClock::with_start_datetime(2026, 1, 1, 0, 0, 0).with_day_duration(4320.0),
+        );
         app.add_systems(Update, update_sky_center);
     }
 }
@@ -20,9 +25,9 @@ impl Plugin for SunMovePlugin {
 pub struct TimedSkyConfig {
     pub planet_tilt_degrees: f32,
     /// Desired duration of daylight in seconds.
-    pub day_duration_secs: f32,
+    pub day_duration_secs: u32,
     /// Desired duration of nighttime in seconds.
-    pub night_duration_secs: f32,
+    pub night_duration_secs: u32,
     /// Desired maximum sun height (altitude) in degrees during the day.
     pub max_sun_height_deg: f32,
     /// The entity representing the sun (usually a DirectionalLight).
@@ -34,8 +39,8 @@ impl Default for TimedSkyConfig {
         Self {
             planet_tilt_degrees: 23.5, // Earth's tilt
             sun_entity: Entity::PLACEHOLDER,
-            day_duration_secs: 15.0,   // Example: 15s day
-            night_duration_secs: 15.0, // Example: 15s night (total cycle 30s)
+            day_duration_secs: 15,   // Example: 15s day
+            night_duration_secs: 15, // Example: 15s night (total cycle 30s)
             max_sun_height_deg: 45.0,
         }
     }
@@ -61,14 +66,14 @@ impl Default for TimedSkyConfig {
 #[allow(non_snake_case)]
 pub fn calculate_latitude_yearfraction(
     planet_tilt_degrees: f32,
-    day_duration_secs: f32,
-    night_duration_secs: f32,
+    day_duration_secs: u32,
+    night_duration_secs: u32,
     max_sun_height_deg: f32,
 ) -> Option<(f32, f32, f32)> {
     let total_duration_secs = day_duration_secs + night_duration_secs;
     let tilt_rad = planet_tilt_degrees.abs() * DEGREES_TO_RADIANS;
 
-    if total_duration_secs <= f32::EPSILON || day_duration_secs < 0.0 || night_duration_secs < 0.0 {
+    if total_duration_secs == 0 {
         warn!(
             "Invalid timed durations: day={}s, night={}s. Cannot calculate.",
             day_duration_secs, night_duration_secs
@@ -86,7 +91,7 @@ pub fn calculate_latitude_yearfraction(
     }
 
     // Handle edge cases: Perpetual Day/Night or 12/12 cycle
-    if day_duration_secs < f32::EPSILON && night_duration_secs > f32::EPSILON {
+    if day_duration_secs == 0 && night_duration_secs > 0 {
         // Perpetual Night (day_fraction = 0)
         // Requires sun never rises, i.e. max altitude <= 0.
         if max_sun_height_deg > f32::EPSILON {
@@ -120,7 +125,7 @@ pub fn calculate_latitude_yearfraction(
         ));
     }
 
-    if night_duration_secs < f32::EPSILON && day_duration_secs > f32::EPSILON {
+    if night_duration_secs == 0 && day_duration_secs > 0 {
         // Perpetual Day (day_fraction = 1)
         // Requires sun never sets, i.e. min altitude >= 0.
         // Max height must be > 0 (unless at pole/equinox/tilt=0 which implies 12/12 max height 0).
@@ -169,12 +174,12 @@ pub fn calculate_latitude_yearfraction(
         return Some((final_lat_deg, calculated_year_fraction, final_dec_deg));
     }
 
-    if total_duration_secs <= f32::EPSILON {
+    if total_duration_secs == 0 {
         warn!("Total duration is zero.");
         return None;
     }
 
-    let day_fraction = day_duration_secs / total_duration_secs;
+    let day_fraction = (day_duration_secs as f32) / (total_duration_secs as f32);
     let max_height_rad = max_sun_height_deg * DEGREES_TO_RADIANS;
 
     let C = (PI * day_fraction).cos();
@@ -305,11 +310,7 @@ pub fn calculate_latitude_yearfraction(
                 1.0 + phi / (2.0 * PI)
             };
             // yf2 maps dec >= 0 to [0.25, 0.5] and dec < 0 to (0.5, 0.75]
-            let yf2 = if dec_rad >= 0.0 {
-                0.5 - phi / (2.0 * PI)
-            } else {
-                0.5 - phi / (2.0 * PI)
-            };
+            let yf2 = 0.5 - phi / (2.0 * PI);
 
             // Let's choose the year fraction that is closer to the 'expected' season for the day length
             // Long day (df > 0.5) suggests summer-like conditions (yf near 0.25 or 0.75 depending on hemi/tilt sign)
@@ -358,14 +359,14 @@ pub struct SkyCenter {
     pub year_fraction: f32,
 
     /// Duration of a full day/night cycle in seconds.
-    pub cycle_duration_secs: f32,
+    pub cycle_duration_secs: u32,
 
     /// The entity representing the sun (usually a DirectionalLight).
     pub sun: Entity,
 
     /// Time elapsed within the current cycle (seconds).
     /// Stored here to allow pausing/setting time easily.
-    pub current_cycle_time: f32,
+    pub current_cycle_time: u32,
 }
 
 impl Default for SkyCenter {
@@ -374,9 +375,9 @@ impl Default for SkyCenter {
             latitude_degrees: 0.0,
             planet_tilt_degrees: 23.5,
             year_fraction: 0.0,
-            cycle_duration_secs: 600.0, // 10 minutes by default
+            cycle_duration_secs: 600, // 10 minutes by default
             sun: Entity::PLACEHOLDER,
-            current_cycle_time: 0.0,
+            current_cycle_time: 0,
         }
     }
 }
@@ -398,7 +399,7 @@ impl SkyCenter {
                 cycle_duration_secs: timed_config.day_duration_secs
                     + timed_config.night_duration_secs,
                 sun: timed_config.sun_entity,
-                current_cycle_time: 0.0,
+                current_cycle_time: 0,
             })
         } else {
             warn!("Failed to calculate latitude/year_fraction/declination for timed sky config.");
@@ -491,14 +492,12 @@ pub fn calculate_sun_direction(
 fn update_sky_center(
     mut q_sky_center: Query<(&mut Transform, &mut SkyCenter)>,
     mut q_sun: Query<&mut Transform, Without<SkyCenter>>,
-    time: Res<Time>,
+    cycle_time: Res<InGameClock>,
 ) {
-    for (mut sky_transforms, mut sky_center) in q_sky_center.iter_mut() {
+    for (mut sky_transforms, sky_center) in q_sky_center.iter_mut() {
         // Update time
-        sky_center.current_cycle_time += time.delta_secs();
-        sky_center.current_cycle_time %= sky_center.cycle_duration_secs; // Cycle time loops
 
-        let hour_fraction = sky_center.current_cycle_time / sky_center.cycle_duration_secs;
+        let hour_fraction = cycle_time.as_hms().2 / sky_center.cycle_duration_secs;
 
         let latitude_rad = sky_center.latitude_degrees * DEGREES_TO_RADIANS;
         let tilt_rad = sky_center.planet_tilt_degrees * DEGREES_TO_RADIANS;
@@ -509,12 +508,12 @@ fn update_sky_center(
         let celestial_pole_axis_local = Vec3::new(0.0, latitude_rad.sin(), latitude_rad.cos());
 
         // Sky sphere rotation
-        let rotation_angle_rad = PI - hour_fraction * 2.0 * PI;
+        let rotation_angle_rad = PI - hour_fraction as f32 * 2.0 * PI;
         sky_transforms.rotation =
             Quat::from_axis_angle(celestial_pole_axis_local, rotation_angle_rad);
 
         let sun_direction_local =
-            calculate_sun_direction(hour_fraction, latitude_rad, tilt_rad, year_fraction);
+            calculate_sun_direction(hour_fraction as f32, latitude_rad, tilt_rad, year_fraction);
 
         if let Ok(mut sun_transform) = q_sun.get_mut(sky_center.sun) {
             sun_transform.translation = sun_direction_local;
