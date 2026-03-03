@@ -175,7 +175,7 @@ pub fn calculate_latitude_yearfraction(
         return None;
     }
 
-    let day_fraction = day_night_ratio * (total_duration_secs as f32);
+    let day_fraction = day_night_ratio;
     let max_height_rad = max_sun_height_deg * DEGREES_TO_RADIANS;
 
     let C = (PI * day_fraction).cos();
